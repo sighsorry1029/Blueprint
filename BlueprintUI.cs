@@ -36,8 +36,8 @@ public static class InteractionUI
     private static RawImage Icon;
     private static Texture OriginalIcon;
     private static readonly RawImage[] Previews = new RawImage[3];
-    public static void Init()
-    { 
+    public static void Init() 
+    {
         UI = Object.Instantiate(kg_Blueprint.Asset.LoadAsset<GameObject>("kg_BlueprintInteractUI"));
         Object.DontDestroyOnLoad(UI);
         UI.SetActive(false);
@@ -61,8 +61,11 @@ public static class InteractionUI
             kg_Blueprint.Logger.LogDebug($"Trying to paste textured via clipboard. Icon is {icon}. Took {dbg_clipboard_watch.ElapsedMilliseconds}ms");
             Icon.texture = icon ? icon : OriginalIcon;
         });
-        Localization.instance.Localize(UI.transform);
         foreach (Button button in UI.GetComponentsInChildren<Button>(true)) button.onClick.AddListener(AudioMan_Awake_Patch.Click);
+    }
+    public static void Localize()
+    {
+        Localization.instance.Localize(UI.transform);
     }
     public static void Update()
     {
@@ -191,6 +194,7 @@ public static class InteractionUI
         {
             if (done /*|| SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null*/) return;
             done = true;
+            Localize();
             if (__instance.transform.Find("StartGame/Panel/JoinPanel/serverCount")?.GetComponent<TextMeshProUGUI>() is not { } tmp) return;
             foreach (TMP_Text componentsInChild in UI.GetComponentsInChildren<TMP_Text>(true)) componentsInChild.font = tmp.font;
         }
@@ -374,11 +378,15 @@ public static class BlueprintUI
         BlueprintName = Main.transform.Find("Name").GetComponent<TMP_Text>();
         BlueprintDescription = Main.transform.Find("Description").GetComponent<TMP_Text>();
         BlueprintAuthor = Main.transform.Find("Author").GetComponent<TMP_Text>();
-        Localization.instance.Localize(UI.transform);
-        ResetMain(); 
         foreach (Button button in UI.GetComponentsInChildren<Button>(true)) button.onClick.AddListener(AudioMan_Awake_Patch.Click);
+        ResetMain(); 
         InteractionUI.Init();
-    } 
+    }
+    private static void Localize()
+    {
+        Localization.instance.Localize(UI.transform);
+        InteractionUI.Localize();
+    }
     private static void AddFromForeign(BlueprintRoot root)
     {
         GameObject temp = root.CreateViewGameObjectForBlueprint();
@@ -939,6 +947,7 @@ public static class BlueprintUI
         {
             if (done) return;
             done = true;
+            Localize();
             if (__instance.transform.Find("StartGame/Panel/JoinPanel/serverCount")?.GetComponent<TextMeshProUGUI>() is not { } tmp) return;
             foreach (TMP_Text componentsInChild in UI.GetComponentsInChildren<TMP_Text>(true)) componentsInChild.font = tmp.font;
         }

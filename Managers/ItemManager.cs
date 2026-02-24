@@ -1,9 +1,23 @@
-﻿using System.ComponentModel;
+﻿using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.ComponentModel;
 using System.Globalization;
+using System.Linq;
+using System.Reflection;
+using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
+using BepInEx;
+using BepInEx.Configuration;
+using HarmonyLib;
+using JetBrains.Annotations;
+using UnityEngine;
 
 namespace ItemManager;
+
+using kg_Blueprint;
+using PieceManager;
 
 [PublicAPI]
 public enum CraftingTable
@@ -12,13 +26,13 @@ public enum CraftingTable
 	Inventory,
 	[InternalName("piece_workbench")] Workbench,
 	[InternalName("piece_cauldron")] Cauldron,
+	[InternalName("piece_MeadCauldron")] MeadCauldron,
 	[InternalName("forge")] Forge,
 	[InternalName("piece_artisanstation")] ArtisanTable,
 	[InternalName("piece_stonecutter")] StoneCutter,
 	[InternalName("piece_magetable")] MageTable,
+	[InternalName("piece_preptable")] PrepTable,
 	[InternalName("blackforge")] BlackForge,
-	[InternalName("piece_preptable")] FoodPreparationTable,
-	[InternalName("piece_MeadCauldron")] MeadKetill,
 	Custom,
 }
 
@@ -44,7 +58,7 @@ public class InternalName : Attribute
 [PublicAPI]
 public class RequiredResourceList
 {
-	public readonly List<Requirement> Requirements = [];
+	public readonly List<Requirement> Requirements = new();
 	public bool Free = false; // If Requirements empty and Free is true, then it costs nothing. If Requirements empty and Free is false, then it won't be craftable.
 
 	public void Add(string itemName, int amount, int quality = 0) => Requirements.Add(new Requirement { itemName = itemName, amount = amount, quality = quality });
@@ -54,7 +68,7 @@ public class RequiredResourceList
 [PublicAPI]
 public class CraftingStationList
 {
-	public readonly List<CraftingStationConfig> Stations = [];
+	public readonly List<CraftingStationConfig> Stations = new();
 
 	public void Add(CraftingTable table, int level) => Stations.Add(new CraftingStationConfig { Table = table, level = level });
 	public void Add(string customTable, int level) => Stations.Add(new CraftingStationConfig { Table = CraftingTable.Custom, level = level, custom = customTable });
@@ -120,7 +134,7 @@ public enum Configurability
 [PublicAPI]
 public class DropTargets
 {
-	public readonly List<DropTarget> Drops = [];
+	public readonly List<DropTarget> Drops = new();
 
 	public void Add(string creatureName, float chance, int min = 1, int? max = null, bool levelMultiplier = true)
 	{
@@ -171,7 +185,7 @@ public class Item
 		public int quality;
 	}
 
-	private static readonly List<Item> registeredItems = [];
+	private static readonly List<Item> registeredItems = new();
 	private static readonly Dictionary<ItemDrop, Item> itemDropMap = new();
 	private static Dictionary<Item, Dictionary<string, List<Recipe>>> activeRecipes = new();
 	private static Dictionary<Recipe, ConfigEntryBase?> hiddenCraftRecipes = new();
@@ -235,8 +249,8 @@ public class Item
 	[Description("Configures whether the item can be bought at the trader.\nDon't forget to set cost to something above 0 or the item will be sold for free.")]
 	public readonly Trade Trade = new();
 
-	internal List<Conversion> Conversions = [];
-	internal List<Smelter.ItemConversion> conversions = [];
+	internal List<Conversion> Conversions = new();
+	internal List<Smelter.ItemConversion> conversions = new();
 	public Dictionary<string, ItemRecipe> Recipes = new();
 
 	public ItemRecipe this[string name]
@@ -248,6 +262,58 @@ public class Item
 				return recipe;
 			}
 			return Recipes[name] = new ItemRecipe();
+		}
+	}
+
+	private LocalizeKey? _name;
+
+	public LocalizeKey Name
+	{
+		get
+		{
+			if (_name is { } name)
+			{
+				return name;
+			}
+
+			ItemDrop.ItemData.SharedData data = Prefab.GetComponent<ItemDrop>().m_itemData.m_shared;
+			if (data.m_name.StartsWith("$"))
+			{
+				_name = new LocalizeKey(data.m_name);
+			}
+			else
+			{
+				string key = "$item_" + Prefab.name.Replace(" ", "_");
+				_name = new LocalizeKey(key).English(data.m_name);
+				data.m_name = key;
+			}
+			return _name;
+		}
+	}
+
+	private LocalizeKey? _description;
+
+	public LocalizeKey Description
+	{
+		get
+		{
+			if (_description is { } description)
+			{
+				return description;
+			}
+
+			ItemDrop.ItemData.SharedData data = Prefab.GetComponent<ItemDrop>().m_itemData.m_shared;
+			if (data.m_description.StartsWith("$"))
+			{
+				_description = new LocalizeKey(data.m_description);
+			}
+			else
+			{
+				string key = "$itemdesc_" + Prefab.name.Replace(" ", "_");
+				_description = new LocalizeKey(key).English(data.m_description);
+				data.m_description = key;
+			}
+			return _description;
 		}
 	}
 
@@ -354,7 +420,7 @@ public class Item
 	{
 		if (configManager?.GetType().GetProperty("DisplayingWindow")!.GetValue(configManager) is true)
 		{
-			configManager.GetType().GetMethod("BuildSettingList")!.Invoke(configManager, []);
+			configManager.GetType().GetMethod("BuildSettingList")!.Invoke(configManager, Array.Empty<object>());
 		}
 	}
 
@@ -403,7 +469,7 @@ public class Item
 			foreach (Item item in registeredItems.Where(i => i.configurability != Configurability.Disabled))
 			{
 				string nameKey = item.Prefab.GetComponent<ItemDrop>().m_itemData.m_shared.m_name;
-				string englishName = new Regex("""['\["\]]""").Replace(english.Localize(nameKey), "").Trim();
+				string englishName = new Regex(@"[=\n\t\\""\'\[\]]*").Replace(english.Localize(nameKey), "").Trim();
 				string localizedName = Localization.instance.Localize(nameKey).Trim();
 
 				int order = 0;
@@ -414,16 +480,12 @@ public class Item
 					foreach (string configKey in item.Recipes.Keys.DefaultIfEmpty(""))
 					{
 						string configSuffix = configKey == "" ? "" : $" ({configKey})";
-						if (configKey == "" && item.Configurable is not null && item.Crafting.Stations.Count == 0)
-						{
-							item.Crafting.Add(CraftingTable.Disabled, 1);
-						}
 
 						if (item.Recipes.ContainsKey(configKey) && item.Recipes[configKey].Crafting.Stations.Count > 0)
 						{
 							ItemConfig cfg = itemCraftConfigs[item][configKey] = new ItemConfig();
 
-							List<ConfigurationManagerAttributes> hideWhenNoneAttributes = [];
+							List<ConfigurationManagerAttributes> hideWhenNoneAttributes = new();
 
 							cfg.table = config(englishName, "Crafting Station" + configSuffix, item.Recipes[configKey].Crafting.Stations.First().Table, new ConfigDescription($"Crafting station where {englishName} is available.", null, new ConfigurationManagerAttributes { Order = --order, Browsable = (item.configurationVisible & Configurability.Recipe) != 0, Category = localizedName }));
 							bool CustomTableBrowsability() => cfg.table.Value == CraftingTable.Custom;
@@ -460,7 +522,7 @@ public class Item
 							}
 
 							bool QualityResultBrowsability() => cfg.requireOneIngredient.Value == Toggle.On;
-							cfg.requireOneIngredient = config(englishName, "Require only one resource" + configSuffix, item.Recipes[configKey].RequireOnlyOneIngredient ? Toggle.On : Toggle.Off, new ConfigDescription($"Whether only one of the ingredients is needed to craft {englishName}", null, new ConfigurationManagerAttributes { Order = --order, browsability = TableLevelBrowsability, Browsable = TableLevelBrowsability() && (item.configurationVisible & Configurability.Recipe) != 0, Category = localizedName }));
+							cfg.requireOneIngredient = config(englishName, "Require only one resource" + configSuffix, item.Recipes[configKey].RequireOnlyOneIngredient ? Toggle.On : Toggle.Off, new ConfigDescription($"Whether only one of the ingredients is needed to craft {englishName}", null, new ConfigurationManagerAttributes { Order = --order, Category = localizedName }));
 							ConfigurationManagerAttributes qualityResultAttributes = new() { Order = --order, browsability = QualityResultBrowsability, Browsable = QualityResultBrowsability() && (item.configurationVisible & Configurability.Recipe) != 0, Category = localizedName };
 							cfg.requireOneIngredient.SettingChanged += (_, _) =>
 							{
@@ -548,7 +610,7 @@ public class Item
 								{
 									foreach (Smelter instantiatedSmelter in Resources.FindObjectsOfTypeAll<Smelter>())
 									{
-										if (Utils.GetPrefabName(instantiatedSmelter.gameObject) == activePiece)
+										if (global::Utils.GetPrefabName(instantiatedSmelter.gameObject) == activePiece)
 										{
 											instantiatedSmelter.m_conversion.RemoveAt(removeIndex);
 										}
@@ -563,7 +625,7 @@ public class Item
 									conversion.config.activePiece = newPieceName;
 									foreach (Smelter instantiatedSmelter in Resources.FindObjectsOfTypeAll<Smelter>())
 									{
-										if (Utils.GetPrefabName(instantiatedSmelter.gameObject) == newPieceName)
+										if (global::Utils.GetPrefabName(instantiatedSmelter.gameObject) == newPieceName)
 										{
 											instantiatedSmelter.m_conversion.Add(item.conversions[index]);
 										}
@@ -649,7 +711,7 @@ public class Item
 					if (itemType is ItemDrop.ItemData.ItemType.Shield or ItemDrop.ItemData.ItemType.Chest or ItemDrop.ItemData.ItemType.Hands or ItemDrop.ItemData.ItemType.Helmet or ItemDrop.ItemData.ItemType.Legs or ItemDrop.ItemData.ItemType.Shoulder)
 					{
 						Dictionary<HitData.DamageType, DamageModifier> modifiers = shared.m_damageModifiers.ToDictionary(d => d.m_type, d => (DamageModifier)(int)d.m_modifier);
-						foreach (HitData.DamageType damageType in ((HitData.DamageType[])Enum.GetValues(typeof(HitData.DamageType))).Except([HitData.DamageType.Chop, HitData.DamageType.Pickaxe, HitData.DamageType.Spirit, HitData.DamageType.Physical, HitData.DamageType.Elemental]))
+						foreach (HitData.DamageType damageType in ((HitData.DamageType[])Enum.GetValues(typeof(HitData.DamageType))).Except(new[] { HitData.DamageType.Chop, HitData.DamageType.Pickaxe, HitData.DamageType.Spirit, HitData.DamageType.Physical, HitData.DamageType.Elemental }))
 						{
 							statcfg($"{damageType.ToString()} Resistance", $"{damageType.ToString()} resistance of {englishName}.", _ => modifiers.TryGetValue(damageType, out DamageModifier modifier) ? modifier : DamageModifier.None, (shared, value) =>
 							{
@@ -737,7 +799,7 @@ public class Item
 
 				if ((item.configurability & Configurability.Trader) != 0)
 				{
-					List<ConfigurationManagerAttributes> traderAttributes = [];
+					List<ConfigurationManagerAttributes> traderAttributes = new();
 					bool TraderBrowsability() => item.traderConfig.trader.Value != 0;
 
 					item.traderConfig = new TraderConfig
@@ -880,7 +942,7 @@ public class Item
 
 		string itemName = prefab.GetComponent<ItemDrop>().m_itemData.m_shared.m_name;
 
-		Inventory[] inventories = Player.s_players.Select(p => p.GetInventory()).Concat(Object.FindObjectsOfType<Container>().Select(c => c.GetInventory())).Where(c => c is not null).ToArray();
+		Inventory[] inventories = Player.s_players.Select(p => p.GetInventory()).Concat(UnityEngine.Object.FindObjectsOfType<Container>().Select(c => c.GetInventory())).Where(c => c is not null).ToArray();
 		foreach (ItemDrop.ItemData itemdata in ObjectDB.instance.m_items.Select(p => p.GetComponent<ItemDrop>()).Where(c => c && c.GetComponent<ZNetView>()).Concat(ItemDrop.s_instances).Select(i => i.m_itemData).Concat(inventories.SelectMany(i => i.GetAllItems())))
 		{
 			if (itemdata.m_shared.m_name == itemName)
@@ -901,7 +963,7 @@ public class Item
 		itemCraftConfigs.TryGetValue(this, out Dictionary<string, ItemConfig> cfgs);
 		foreach (KeyValuePair<string, ItemRecipe> kv in Recipes)
 		{
-			List<Recipe> recipes = [];
+			List<Recipe> recipes = new();
 
 			foreach (CraftingStationConfig station in kv.Value.Crafting.Stations)
 			{
@@ -910,7 +972,7 @@ public class Item
 				Recipe recipe = ScriptableObject.CreateInstance<Recipe>();
 				recipe.name = $"{Prefab.name}_Recipe_{station.Table.ToString()}";
 				recipe.m_amount = kv.Value.CraftAmount;
-				recipe.m_enabled = (int)(kv.Value.RecipeIsActive?.BoxedValue ?? 1) != 0 && cfg?.table.Value != CraftingTable.Disabled;
+				recipe.m_enabled = cfg is null ? (int)(kv.Value.RecipeIsActive?.BoxedValue ?? 1) != 0 : cfg.table.Value != CraftingTable.Disabled;
 				recipe.m_item = Prefab.GetComponent<ItemDrop>();
 				recipe.m_resources = SerializedRequirements.toPieceReqs(objectDB, cfg?.craft == null ? new SerializedRequirements(kv.Value.RequiredItems.Requirements) : new SerializedRequirements(cfg.craft.Value), cfg?.upgrade == null ? new SerializedRequirements(kv.Value.RequiredUpgradeItems.Requirements) : new SerializedRequirements(cfg.upgrade.Value));
 				if ((cfg == null || recipes.Count > 0 ? station.Table : cfg.table.Value) is CraftingTable.Inventory or CraftingTable.Disabled)
@@ -937,7 +999,7 @@ public class Item
 				recipe.m_qualityResultAmountMultiplier = cfg?.qualityResultAmountMultiplier.Value ?? kv.Value.QualityResultAmountMultiplier;
 
 				recipes.Add(recipe);
-				if (station.Table != CraftingTable.Disabled && kv.Value.RequiredItems is { Free: false, Requirements.Count: 0 })
+				if (kv.Value.RequiredItems is { Free: false, Requirements.Count: 0 })
 				{
 					hiddenCraftRecipes.Add(recipe, kv.Value.RecipeIsActive);
 				}
@@ -951,7 +1013,7 @@ public class Item
 			objectDB.m_recipes.AddRange(recipes);
 		}
 
-		conversions = [];
+		conversions = new List<Smelter.ItemConversion>();
 		for (int i = 0; i < Conversions.Count; ++i)
 		{
 			Conversion conversion = Conversions[i];
@@ -984,7 +1046,7 @@ public class Item
 	[HarmonyPriority(Priority.Last)]
 	internal static void Patch_ObjectDBInit(ObjectDB __instance)
 	{
-		if (__instance.GetItemPrefab("Wood") == null)
+		if (__instance.GetItemPrefab("YagluthDrop") == null)
 		{
 			return;
 		}
@@ -1000,7 +1062,7 @@ public class Item
 
 	internal static void Patch_TraderGetAvailableItems(global::Trader __instance, ref List<global::Trader.TradeItem> __result)
 	{
-		Trader trader = Utils.GetPrefabName(__instance.gameObject) switch
+		Trader trader = global::Utils.GetPrefabName(__instance.gameObject) switch
 		{
 			"Haldor" => Trader.Haldor,
 			"Hildir" => Trader.Hildir,
@@ -1024,11 +1086,11 @@ public class Item
 			IEnumerable<ItemConfig> configs;
 			if (!itemCraftConfigs.TryGetValue(item, out Dictionary<string, ItemConfig> itemConfigs))
 			{
-				configs = [];
+				configs = Enumerable.Empty<ItemConfig>();
 			}
 			else if (Player.m_localPlayer.GetCurrentCraftingStation() is { } currentCraftingStation)
 			{
-				string stationName = Utils.GetPrefabName(currentCraftingStation.gameObject);
+				string stationName = global::Utils.GetPrefabName(currentCraftingStation.gameObject);
 				configs = itemConfigs.Where(c => c.Value.table.Value switch
 				{
 					CraftingTable.Inventory or CraftingTable.Disabled => false,
@@ -1044,9 +1106,9 @@ public class Item
 		}
 	}
 
-	internal static void Patch_GetAvailableRecipesPrefix(ref Dictionary<Assembly, List<Recipe>>? __state)
+	internal static void Patch_GetAvailableRecipesPrefix(ref Dictionary<Assembly, Dictionary<Recipe, ConfigEntryBase?>>? __state)
 	{
-		__state ??= new Dictionary<Assembly, List<Recipe>>();
+		__state ??= new Dictionary<Assembly, Dictionary<Recipe, ConfigEntryBase?>>();
 		Dictionary<Recipe, ConfigEntryBase?>? hidden;
 		if (InventoryGui.instance.InCraftTab())
 		{
@@ -1061,24 +1123,122 @@ public class Item
 			return;
 		}
 
-		List<Recipe> toHide = hidden.Select(kv => kv.Key).Where(r => r.m_enabled).ToList();
-		__state[Assembly.GetExecutingAssembly()] = toHide;
-		foreach (Recipe recipe in toHide)
+		foreach (Recipe recipe in hidden.Keys)
 		{
 			recipe.m_enabled = false;
 		}
+		__state[Assembly.GetExecutingAssembly()] = hidden;
 	}
 
-	internal static void Patch_GetAvailableRecipesFinalizer(Dictionary<Assembly, List<Recipe>> __state)
+	internal static void Patch_GetAvailableRecipesFinalizer(Dictionary<Assembly, Dictionary<Recipe, ConfigEntryBase?>> __state)
 	{
-		if (__state.TryGetValue(Assembly.GetExecutingAssembly(), out List<Recipe> hidden))
+		if (__state.TryGetValue(Assembly.GetExecutingAssembly(), out Dictionary<Recipe, ConfigEntryBase?> hidden))
 		{
-			foreach (Recipe recipe in hidden)
+			foreach (KeyValuePair<Recipe, ConfigEntryBase?> kv in hidden)
 			{
-				recipe.m_enabled = true;
+				kv.Key.m_enabled = (int)(kv.Value?.BoxedValue ?? 1) != 0;
 			}
 		}
-	} 
+	}
+
+	// Ensure valheim distinguishes between active and inactive (belonging to another upgrade level) requirements when cutting off at 4 items displayed 
+	internal static IEnumerable<CodeInstruction> Transpile_SetupRequirementList(IEnumerable<CodeInstruction> instructionsEnumerable, ILGenerator ilg)
+	{
+		/*
+		for (int index2 = num; index2 < requirementArray.Length; ++index2)
+		{
+		 if (InventoryGui.SetupRequirement(this.m_recipeRequirementList[index1].transform, requirementArray[index2], player, true, quality))
+		  ++index1;
+		 if (index1 >= this.m_recipeRequirementList.Length)
+		  break;
+		}
+
+		// =>
+
+
+		for (int index2 = [<check is 0> start: <pop>] num; index2 < requirementArray.Length; ++index2)
+		{
+		 if (InventoryGui.SetupRequirement(this.m_recipeRequirementList[index1].transform, requirementArray[index2], player, true, quality))
+		  ++index1;
+		 if (index1 >= this.m_recipeRequirementList.Length)
+		  goto end;
+		}
+		if (!<result of check is 0> && index1 < this.m_recipeRequirementList.Length)
+		{
+		 index1 = 0;
+		 goto start;
+		}
+		end:
+		*/
+
+		List<CodeInstruction> instructions = instructionsEnumerable.ToList();
+		MethodInfo setupRequirement = AccessTools.DeclaredMethod(typeof(InventoryGui), nameof(InventoryGui.SetupRequirement));
+		CodeInstruction index1Load = null!;
+		CodeInstruction index1Store = null!;
+		LocalBuilder skippedNum = ilg.DeclareLocal(typeof(int));
+		Dictionary<Label, int> encounteredLabels = new();
+		bool inLoop = false;
+		int loopEndInstruction = 0;
+		int loopStartInstruction = 0;
+		for (int i = 0; i < instructions.Count; ++i)
+		{
+			if (instructions[i].Calls(setupRequirement))
+			{
+				index1Load = instructions[i + 2];
+				index1Store = instructions[i + 5];
+				inLoop = true;
+			}
+
+			if (inLoop)
+			{
+				if (instructions[i].Branches(out Label? target) && encounteredLabels.TryGetValue(target!.Value, out loopStartInstruction))
+				{
+					loopEndInstruction = i;
+					break;
+				}
+			}
+			else
+			{
+				foreach (Label label in instructions[i].labels)
+				{
+					encounteredLabels[label] = i;
+				}
+			}
+		}
+
+		if (instructions[loopStartInstruction - 3].opcode == OpCodes.Dup)
+		{
+			// Don't patch ourselves twice?!
+			return instructions;
+		}
+
+		Label loopSkipLabel = ilg.DefineLabel();
+		Label loopStartLabel = ilg.DefineLabel();
+		instructions[loopEndInstruction + 1].labels.Add(loopSkipLabel);
+
+		instructions.InsertRange(loopEndInstruction + 1, new[]
+		{
+			new CodeInstruction(OpCodes.Ldloc, skippedNum),
+			new CodeInstruction(OpCodes.Brfalse, loopSkipLabel),
+			index1Load.Clone(),
+			new CodeInstruction(OpCodes.Ldarg_0),
+			new CodeInstruction(OpCodes.Ldfld, AccessTools.DeclaredField(typeof(InventoryGui), nameof(InventoryGui.m_recipeRequirementList))),
+			new CodeInstruction(OpCodes.Ldlen),
+			new CodeInstruction(OpCodes.Bgt, loopSkipLabel),
+			new CodeInstruction(OpCodes.Ldc_I4_0),
+			index1Store.Clone(),
+			new CodeInstruction(OpCodes.Ldc_I4_0),
+			new CodeInstruction(OpCodes.Br, loopStartLabel),
+		});
+
+		instructions.InsertRange(loopStartInstruction - 2, new[]
+		{
+			new CodeInstruction(OpCodes.Dup) { labels = new List<Label> { loopStartLabel } },
+			new CodeInstruction(OpCodes.Stloc, skippedNum),
+		});
+
+		return instructions;
+	}
 
 	internal static bool Patch_RequirementGetAmount(Piece.Requirement __instance, int qualityLevel, ref int __result)
 	{
@@ -1163,12 +1323,12 @@ public class Item
 			GameObject visual;
 			if (item.transform.Find("attach") is { } attach)
 			{
-				visual = Object.Instantiate(attach.gameObject);
+				visual = UnityEngine.Object.Instantiate(attach.gameObject);
 			}
 			else
 			{
 				ZNetView.m_forceDisableInit = true;
-				visual = Object.Instantiate(item.gameObject);
+				visual = UnityEngine.Object.Instantiate(item.gameObject);
 				ZNetView.m_forceDisableInit = false;
 			}
 			if (itemRotation is not null)
@@ -1205,13 +1365,13 @@ public class Item
 
 			RenderTexture.active = currentRenderTexture;
 
-			item.m_itemData.m_shared.m_icons = [Sprite.Create(texture, rect, new Vector2(0.5f, 0.5f))];
+			item.m_itemData.m_shared.m_icons = new[] { Sprite.Create(texture, rect, new Vector2(0.5f, 0.5f)) };
 
-			Object.DestroyImmediate(visual);
+			UnityEngine.Object.DestroyImmediate(visual);
 			camera.targetTexture.Release();
 
-			Object.Destroy(camera);
-			Object.Destroy(topLight);
+			UnityEngine.Object.Destroy(camera);
+			UnityEngine.Object.Destroy(topLight);
 		}
 		IEnumerator Delay()
 		{
@@ -1252,10 +1412,10 @@ public class Item
 		{
 			bool locked = cfg.Description.Tags.Select(a => a.GetType().Name == "ConfigurationManagerAttributes" ? (bool?)a.GetType().GetField("ReadOnly")?.GetValue(a) : null).FirstOrDefault(v => v != null) ?? false;
 
-			List<Requirement> newReqs = [];
+			List<Requirement> newReqs = new();
 			bool wasUpdated = false;
 
-			int RightColumnWidth = (int)(configManager?.GetType().GetProperty("RightColumnWidth", BindingFlags.Instance | BindingFlags.NonPublic)!.GetGetMethod(true).Invoke(configManager, []) ?? 130);
+			int RightColumnWidth = (int)(configManager?.GetType().GetProperty("RightColumnWidth", BindingFlags.Instance | BindingFlags.NonPublic)!.GetGetMethod(true).Invoke(configManager, Array.Empty<object>()) ?? 130);
 
 			GUILayout.BeginVertical();
 
@@ -1372,10 +1532,10 @@ public class Item
 	{
 		bool locked = cfg.Description.Tags.Select(a => a.GetType().Name == "ConfigurationManagerAttributes" ? (bool?)a.GetType().GetField("ReadOnly")?.GetValue(a) : null).FirstOrDefault(v => v != null) ?? false;
 
-		List<DropTarget> newDrops = [];
+		List<DropTarget> newDrops = new();
 		bool wasUpdated = false;
 
-		int RightColumnWidth = (int)(configManager?.GetType().GetProperty("RightColumnWidth", BindingFlags.Instance | BindingFlags.NonPublic)!.GetGetMethod(true).Invoke(configManager, []) ?? 130);
+		int RightColumnWidth = (int)(configManager?.GetType().GetProperty("RightColumnWidth", BindingFlags.Instance | BindingFlags.NonPublic)!.GetGetMethod(true).Invoke(configManager, Array.Empty<object>()) ?? 130);
 
 		GUILayout.BeginVertical();
 		foreach (DropTarget drop in new SerializedDrop((string)cfg.BoxedValue).Drops.DefaultIfEmpty(new DropTarget { min = 1, max = 1, creature = "", chance = 1 }))
@@ -1531,7 +1691,7 @@ public class Item
 
 		public SerializedDrop(string drops)
 		{
-			Drops = (drops == "" ? [] : drops.Split(',')).Select(r =>
+			Drops = (drops == "" ? Array.Empty<string>() : drops.Split(',')).Select(r =>
 			{
 				string[] parts = r.Split(':');
 				if (parts.Length <= 2 || !int.TryParse(parts[2], out int min))
@@ -1632,12 +1792,103 @@ public class Item
 	{
 		ConfigEntry<T> configEntry = plugin.Config.Bind(group, name, value, description);
 
-		configSync?.GetType().GetMethod("AddConfigEntry")!.MakeGenericMethod(typeof(T)).Invoke(configSync, [configEntry]);
+		configSync?.GetType().GetMethod("AddConfigEntry")!.MakeGenericMethod(typeof(T)).Invoke(configSync, new object[] { configEntry });
 
 		return configEntry;
 	}
 
 	private static ConfigEntry<T> config<T>(string group, string name, T value, string description) => config(group, name, value, new ConfigDescription(description));
+}
+
+[PublicAPI]
+public class LocalizeKey
+{
+	private static readonly List<LocalizeKey> keys = new();
+
+	public readonly string Key;
+	public readonly Dictionary<string, string> Localizations = new();
+
+	public LocalizeKey(string key)
+	{
+		Key = key.Replace("$", "");
+		keys.Add(this);
+	}
+
+	public void Alias(string alias)
+	{
+		Localizations.Clear();
+		if (!alias.Contains("$"))
+		{
+			alias = $"${alias}";
+		}
+		Localizations["alias"] = alias;
+		Localization.instance.AddWord(Key, Localization.instance.Localize(alias));
+	}
+
+	public LocalizeKey English(string key) => addForLang("English", key);
+	public LocalizeKey Swedish(string key) => addForLang("Swedish", key);
+	public LocalizeKey French(string key) => addForLang("French", key);
+	public LocalizeKey Italian(string key) => addForLang("Italian", key);
+	public LocalizeKey German(string key) => addForLang("German", key);
+	public LocalizeKey Spanish(string key) => addForLang("Spanish", key);
+	public LocalizeKey Russian(string key) => addForLang("Russian", key);
+	public LocalizeKey Romanian(string key) => addForLang("Romanian", key);
+	public LocalizeKey Bulgarian(string key) => addForLang("Bulgarian", key);
+	public LocalizeKey Macedonian(string key) => addForLang("Macedonian", key);
+	public LocalizeKey Finnish(string key) => addForLang("Finnish", key);
+	public LocalizeKey Danish(string key) => addForLang("Danish", key);
+	public LocalizeKey Norwegian(string key) => addForLang("Norwegian", key);
+	public LocalizeKey Icelandic(string key) => addForLang("Icelandic", key);
+	public LocalizeKey Turkish(string key) => addForLang("Turkish", key);
+	public LocalizeKey Lithuanian(string key) => addForLang("Lithuanian", key);
+	public LocalizeKey Czech(string key) => addForLang("Czech", key);
+	public LocalizeKey Hungarian(string key) => addForLang("Hungarian", key);
+	public LocalizeKey Slovak(string key) => addForLang("Slovak", key);
+	public LocalizeKey Polish(string key) => addForLang("Polish", key);
+	public LocalizeKey Dutch(string key) => addForLang("Dutch", key);
+	public LocalizeKey Portuguese_European(string key) => addForLang("Portuguese_European", key);
+	public LocalizeKey Portuguese_Brazilian(string key) => addForLang("Portuguese_Brazilian", key);
+	public LocalizeKey Chinese(string key) => addForLang("Chinese", key);
+	public LocalizeKey Japanese(string key) => addForLang("Japanese", key);
+	public LocalizeKey Korean(string key) => addForLang("Korean", key);
+	public LocalizeKey Hindi(string key) => addForLang("Hindi", key);
+	public LocalizeKey Thai(string key) => addForLang("Thai", key);
+	public LocalizeKey Abenaki(string key) => addForLang("Abenaki", key);
+	public LocalizeKey Croatian(string key) => addForLang("Croatian", key);
+	public LocalizeKey Georgian(string key) => addForLang("Georgian", key);
+	public LocalizeKey Greek(string key) => addForLang("Greek", key);
+	public LocalizeKey Serbian(string key) => addForLang("Serbian", key);
+	public LocalizeKey Ukrainian(string key) => addForLang("Ukrainian", key);
+
+	private LocalizeKey addForLang(string lang, string value)
+	{
+		Localizations[lang] = value;
+		if (Localization.instance.GetSelectedLanguage() == lang)
+		{
+			Localization.instance.AddWord(Key, value);
+		}
+		else if (lang == "English" && !Localization.instance.m_translations.ContainsKey(Key))
+		{
+			Localization.instance.AddWord(Key, value);
+		}
+		return this;
+	}
+
+	[HarmonyPriority(Priority.LowerThanNormal)]
+	internal static void AddLocalizedKeys(Localization __instance, string language)
+	{
+		foreach (LocalizeKey key in keys)
+		{
+			if (key.Localizations.TryGetValue(language, out string Translation) || key.Localizations.TryGetValue("English", out Translation))
+			{
+				__instance.AddWord(key.Key, Translation);
+			}
+			else if (key.Localizations.TryGetValue("alias", out string alias))
+			{
+				__instance.AddWord(key.Key, Localization.instance.Localize(alias));
+			}
+		}
+	}
 }
 
 public static class LocalizationCache
@@ -1685,6 +1936,7 @@ public static class PrefabManager
 		harmony.Patch(AccessTools.DeclaredMethod(typeof(ZNetScene), nameof(ZNetScene.Awake)), postfix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(Item), nameof(Patch_ZNetSceneAwake))));
 		harmony.Patch(AccessTools.DeclaredMethod(typeof(ZNetScene), nameof(ZNetScene.Awake)), new HarmonyMethod(AccessTools.DeclaredMethod(typeof(PrefabManager), nameof(Patch_ZNetSceneAwake))));
 		harmony.Patch(AccessTools.DeclaredMethod(typeof(InventoryGui), nameof(InventoryGui.UpdateRecipe)), transpiler: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(Item), nameof(Item.Transpile_InventoryGui))));
+		harmony.Patch(AccessTools.DeclaredMethod(typeof(InventoryGui), nameof(InventoryGui.SetupRequirementList)), transpiler: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(Item), nameof(Item.Transpile_SetupRequirementList))));
 		harmony.Patch(AccessTools.DeclaredMethod(typeof(Piece.Requirement), nameof(Piece.Requirement.GetAmount)), prefix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(Item), nameof(Item.Patch_RequirementGetAmount))));
 		harmony.Patch(AccessTools.DeclaredMethod(typeof(Player), nameof(Player.GetAvailableRecipes)), prefix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(Item), nameof(Item.Patch_GetAvailableRecipesPrefix))), finalizer: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(Item), nameof(Item.Patch_GetAvailableRecipesFinalizer))));
 		harmony.Patch(AccessTools.DeclaredMethod(typeof(Recipe), nameof(Recipe.GetRequiredStationLevel)), postfix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(Item), nameof(Item.Patch_MaximumRequiredStationLevel))));
@@ -1692,6 +1944,7 @@ public static class PrefabManager
 		harmony.Patch(AccessTools.DeclaredMethod(typeof(Smelter), nameof(Smelter.OnAddOre)), postfix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(Item), nameof(Item.Patch_OnAddSmelterInput))));
 		harmony.Patch(AccessTools.DeclaredMethod(typeof(global::Trader), nameof(global::Trader.GetAvailableItems)), postfix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(Item), nameof(Item.Patch_TraderGetAvailableItems))));
 		harmony.Patch(AccessTools.DeclaredMethod(typeof(Localization), nameof(Localization.SetupLanguage)), postfix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(LocalizationCache), nameof(LocalizationCache.LocalizationPostfix))));
+		harmony.Patch(AccessTools.DeclaredMethod(typeof(Localization), nameof(Localization.LoadCSV)), postfix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(LocalizeKey), nameof(LocalizeKey.AddLocalizedKeys))));
 	}
 
 	private struct BundleId
@@ -1713,8 +1966,8 @@ public static class PrefabManager
 		return assets;
 	}
 
-	private static readonly List<GameObject> prefabs = [];
-	private static readonly List<GameObject> ZnetOnlyPrefabs = [];
+	private static readonly List<GameObject> prefabs = new();
+	private static readonly List<GameObject> ZnetOnlyPrefabs = new();
 
 	public static GameObject RegisterPrefab(string assetBundleFileName, string prefabName, string folderName = "assets") => RegisterPrefab(RegisterAssetBundle(assetBundleFileName, folderName), prefabName);
 

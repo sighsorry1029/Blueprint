@@ -20,7 +20,7 @@ public class kg_Blueprint : BaseUnityPlugin
     public static kg_Blueprint _thistype; 
     private const string GUID = "kg.Blueprint";
     private const string NAME = "Blueprint";   
-    private const string VERSION = "1.6.4";
+    private const string VERSION = "1.6.6";
     public static readonly AssetBundle Asset = GetAssetBundle("kg_blueprint");
     public static readonly string BlueprintsPath = Path.Combine(Paths.ConfigPath, "Blueprints");
     private static readonly List<GameObject> ReplaceMaterials = [];
