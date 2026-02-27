@@ -244,12 +244,29 @@ public class kg_Blueprint : BaseUnityPlugin
             try 
             {
                 if (!File.Exists(path)) return; 
-                string data = Convert.ToBase64String(File.ReadAllBytes(path));  
                 ClipboardDataType type = root.Source() switch
                 {
                     BlueprintRoot.SourceType.Native => ClipboardDataType.NativeBytes,
                     BlueprintRoot.SourceType.NativeOptimized => ClipboardDataType.NativeBytesOptimized,
+                    BlueprintRoot.SourceType.Planbuild => ClipboardDataType.NativeText,
+                    BlueprintRoot.SourceType.VBuild => ClipboardDataType.NativeText,
+                    BlueprintRoot.SourceType.None => ClipboardDataType.NativeText,
+                    _ => ClipboardDataType.NativeText,
                 };
+
+                string data = type switch
+                {
+                    ClipboardDataType.NativeBytes => Convert.ToBase64String(File.ReadAllBytes(path)),
+                    ClipboardDataType.NativeBytesOptimized => Convert.ToBase64String(File.ReadAllBytes(path)),
+                    ClipboardDataType.NativeText => new SerializerBuilder()
+                        .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitDefaults)
+                        .WithTypeConverter(new IntOrStringConverter())
+                        .WithTypeConverter(new UnityVector3Converter())
+                        .Build()
+                        .Serialize(root),
+                    _ => string.Empty,
+                };
+
                 data = $"kgbp{(int)type}{data}";
                 ThreadingHelper.Instance.StartSyncInvoke(() => GUIUtility.systemCopyBuffer = data);
             }

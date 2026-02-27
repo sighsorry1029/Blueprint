@@ -157,9 +157,9 @@ public class UnityVector3Converter : IYamlTypeConverter
     public bool Accepts(Type type) => type == typeof(Vector3);
     public object ReadYaml(IParser parser, Type type, ObjectDeserializer rootDeserializer)
     {
-        parser.Expect<MappingStart>(); 
+        parser.Consume<MappingStart>();
         float x = 0f, y = 0f, z = 0f;
-        while (parser.Allow<MappingEnd>() == null)
+        while (!parser.TryConsume<MappingEnd>(out _))
         {
             string key = parser.Consume<Scalar>().Value;
             switch (key)
@@ -219,6 +219,7 @@ public class BlueprintRoot : ISerializableParameter
             ".oprint" => SourceType.NativeOptimized,
             ".blueprint" => SourceType.Planbuild,
             ".vbuild" => SourceType.VBuild,
+            _ => SourceType.None,
         } : SourceType.None;
     private string Category;
     public void SetCategory(string category) => Category = category;

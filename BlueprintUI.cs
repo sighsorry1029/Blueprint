@@ -1,4 +1,7 @@
-﻿using System.Diagnostics;
+﻿﻿using System.Diagnostics;
+using System.Text;
+using System.Runtime.CompilerServices;
+using System.Text.RegularExpressions;
 using BepInEx.Bootstrap;
 using ItemDataManager;
 using kg_Blueprint.Managers;
@@ -65,7 +68,14 @@ public static class InteractionUI
     }
     public static void Localize()
     {
+        if (!UI || Localization.m_instance == null)
+        {
+            return;
+        }
+
+        BlueprintUI.BlueprintLocalizationFallback.EnsureNativePatched();
         Localization.instance.Localize(UI.transform);
+        BlueprintUI.BlueprintLocalizationFallback.RefreshTokens(UI.transform);
     }
     public static void Update()
     {
@@ -136,6 +146,7 @@ public static class InteractionUI
     public static void Show(BlueprintSource source) 
     { 
         if (source == null) return;
+        Localize();
         InputField_Name.text = "";
         InputField_Description.text = "";
         Icon.texture = OriginalIcon; 
@@ -202,6 +213,226 @@ public static class InteractionUI
 }
 public static class BlueprintUI
 {
+    internal static class BlueprintLocalizationFallback
+    {
+        private sealed class TextTemplateState
+        {
+            public string Template = string.Empty;
+            public string LastLocalized = string.Empty;
+        }
+
+        private static readonly Regex TokenRegex = new(@"\[?\$?(kg_blueprint_[a-z0-9_]+)\]?", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Dictionary<string, Dictionary<string, string>> CachedLanguageData = new();
+        private static readonly ConditionalWeakTable<TMP_Text, TextTemplateState> TextTemplateCache = new();
+        private static readonly string[] SupportedExtensions = [".yml", ".json"];
+        private static string? LastPatchedLanguage;
+
+        private static IEnumerable<string> PluginFilePrefixes
+        {
+            get
+            {
+                if (Chainloader.PluginInfos.Values.FirstOrDefault(info => info.Instance != null && info.Instance.GetType().Assembly == Assembly.GetExecutingAssembly())?.Metadata is { } metadata)
+                {
+                    if (!string.IsNullOrWhiteSpace(metadata.Name))
+                    {
+                        yield return metadata.Name;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(metadata.GUID) && !metadata.GUID.Equals(metadata.Name, StringComparison.OrdinalIgnoreCase))
+                    {
+                        yield return metadata.GUID;
+                    }
+                }
+                else
+                {
+                    yield return "Blueprint";
+                }
+            }
+        }
+
+        private static Dictionary<string, string> DeserializeText(string text) => new DeserializerBuilder().IgnoreFields().Build().Deserialize<Dictionary<string, string>?>(text) ?? new Dictionary<string, string>(StringComparer.Ordinal);
+
+        private static bool TryGetLanguageFromExternalFile(string file, out string language)
+        {
+            string fileName = Path.GetFileNameWithoutExtension(file);
+            foreach (string prefix in PluginFilePrefixes)
+            {
+                string prefixWithDot = prefix + ".";
+                if (!fileName.StartsWith(prefixWithDot, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                language = fileName.Substring(prefixWithDot.Length);
+                return !string.IsNullOrWhiteSpace(language);
+            }
+
+            language = string.Empty;
+            return false;
+        }
+
+        private static byte[]? ReadEmbeddedLanguage(string language)
+        {
+            foreach (string baseName in GetEmbeddedBaseNames(language))
+            {
+                foreach (string ext in SupportedExtensions)
+                {
+                    if (global::LocalizationManager.Localizer.ReadEmbeddedFileBytes(baseName + ext) is { } bytes)
+                    {
+                        return bytes;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private static IEnumerable<string> GetEmbeddedBaseNames(string language)
+        {
+            yield return "translations." + language;
+            foreach (string prefix in PluginFilePrefixes)
+            {
+                yield return "translations." + prefix + "." + language;
+            }
+        }
+
+        private static Dictionary<string, string> GetOrLoadLanguageData(string language)
+        {
+            if (CachedLanguageData.TryGetValue(language, out Dictionary<string, string>? cached))
+            {
+                return cached;
+            }
+
+            Dictionary<string, string> loaded = new(StringComparer.Ordinal);
+            string? externalPath = null;
+            string pluginPath = Path.GetDirectoryName(Paths.PluginPath)!;
+            foreach (string file in Directory.GetFiles(pluginPath, "*.*", SearchOption.AllDirectories).Where(f => SupportedExtensions.Contains(Path.GetExtension(f), StringComparer.OrdinalIgnoreCase)))
+            {
+                if (!TryGetLanguageFromExternalFile(file, out string fileLanguage))
+                {
+                    continue;
+                }
+
+                if (fileLanguage.Equals(language, StringComparison.Ordinal))
+                {
+                    externalPath = file;
+                    break;
+                }
+            }
+
+            if (externalPath is not null)
+            {
+                loaded = DeserializeText(File.ReadAllText(externalPath));
+            }
+            else
+            {
+                if (ReadEmbeddedLanguage(language) is { } bytes)
+                {
+                    loaded = DeserializeText(Encoding.UTF8.GetString(bytes));
+                }
+            }
+
+            CachedLanguageData[language] = loaded;
+            return loaded;
+        }
+
+        private static Dictionary<string, string> GetMergedLanguageData(string language)
+        {
+            Dictionary<string, string> merged = new(GetOrLoadLanguageData("English"), StringComparer.Ordinal);
+            if (!language.Equals("English", StringComparison.Ordinal))
+            {
+                foreach (KeyValuePair<string, string> kv in GetOrLoadLanguageData(language))
+                {
+                    merged[kv.Key] = kv.Value;
+                }
+            }
+
+            return merged;
+        }
+
+        public static bool EnsureNativePatched()
+        {
+            if (Localization.m_instance == null)
+            {
+                return false;
+            }
+
+            string language = Localization.instance.GetSelectedLanguage();
+            if (string.Equals(LastPatchedLanguage, language, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            foreach (KeyValuePair<string, string> kv in GetMergedLanguageData(language))
+            {
+                if (!kv.Key.StartsWith("kg_blueprint_", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                Localization.instance.AddWord(kv.Key, kv.Value);
+            }
+
+            LastPatchedLanguage = language;
+            return true;
+        }
+
+        private static bool ContainsBlueprintToken(string text) => !string.IsNullOrWhiteSpace(text) && TokenRegex.IsMatch(text);
+
+        private static string NormalizeTemplate(string text) => TokenRegex.Replace(text, match => "$" + match.Groups[1].Value);
+
+        private static string ReplaceTokens(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text) || Localization.m_instance == null)
+            {
+                return text;
+            }
+
+            return TokenRegex.Replace(text, match =>
+            {
+                string token = match.Groups[1].Value;
+                string translated = Localization.instance.Localize("$" + token);
+                return translated == $"[{token}]" ? match.Value : translated;
+            });
+        }
+
+        public static void RefreshTokens(Transform root)
+        {
+            if (!root || Localization.m_instance == null)
+            {
+                return;
+            }
+
+            foreach (TMP_Text tmpText in root.GetComponentsInChildren<TMP_Text>(true))
+            {
+                string current = tmpText.text;
+                TextTemplateState state = TextTemplateCache.GetOrCreateValue(tmpText);
+                string template;
+
+                if (ContainsBlueprintToken(current))
+                {
+                    template = NormalizeTemplate(current);
+                    state.Template = template;
+                }
+                else if (!string.IsNullOrWhiteSpace(state.Template) && current == state.LastLocalized)
+                {
+                    template = state.Template;
+                }
+                else
+                {
+                    continue;
+                }
+
+                string localized = ReplaceTokens(template);
+                state.LastLocalized = localized;
+                if (localized != current)
+                {
+                    tmpText.text = localized;
+                }
+            }
+        }
+    }
+
     private static bool IsVisible => UI && UI.activeSelf;
     private static BlueprintRoot Current;
     private static GameObject LastPressedEntry;
@@ -384,7 +615,14 @@ public static class BlueprintUI
     }
     private static void Localize()
     {
+        if (!UI || Localization.m_instance == null)
+        {
+            return;
+        }
+
+        BlueprintLocalizationFallback.EnsureNativePatched();
         Localization.instance.Localize(UI.transform);
+        BlueprintLocalizationFallback.RefreshTokens(UI.transform);
         InteractionUI.Localize();
     }
     private static void AddFromForeign(BlueprintRoot root)
@@ -459,7 +697,13 @@ public static class BlueprintUI
         ModelView.gameObject.SetActive(true);
         CreateViewCoroutine = null;
     }
-    public static void Update() { if (Input.GetKeyDown(KeyCode.Escape) && IsVisible) Hide(); }
+    public static void Update()
+    {
+        if (Input.GetKeyDown(KeyCode.Escape) && IsVisible)
+        {
+            Hide();
+        }
+    }
     private static void UpdateCanvases() 
     {
         List<ContentSizeFitter> fitters = UI.GetComponentsInChildren<ContentSizeFitter>().ToList();
@@ -802,6 +1046,7 @@ public static class BlueprintUI
 
     public static void Show(ForeignBlueprintSource foreignSource = null)
     {
+        Localize();
         ForeignSource = foreignSource;
         ForeignTab.SetActive(ForeignSource != null);
         ButtonsTab.SetActive(ForeignSource == null);
@@ -952,6 +1197,33 @@ public static class BlueprintUI
             foreach (TMP_Text componentsInChild in UI.GetComponentsInChildren<TMP_Text>(true)) componentsInChild.font = tmp.font;
         }
     }
+    [HarmonyPatch(typeof(Localization), nameof(Localization.SetupLanguage))]
+    private static class Localization_SetupLanguage_Patch
+    {
+        [UsedImplicitly] private static void Postfix()
+        {
+            if (Localization.m_instance == null)
+            {
+                return;
+            }
+
+            BlueprintLocalizationFallback.EnsureNativePatched();
+            if (UI)
+            {
+                Localization.instance.Localize(UI.transform);
+                BlueprintLocalizationFallback.RefreshTokens(UI.transform);
+            }
+
+            InteractionUI.Localize();
+
+            KeyHints keyHints = Object.FindObjectOfType<KeyHints>();
+            if (keyHints && keyHints.m_buildHints)
+            {
+                Localization.instance.Localize(keyHints.m_buildHints.transform);
+                BlueprintLocalizationFallback.RefreshTokens(keyHints.m_buildHints.transform);
+            }
+        }
+    }
     [HarmonyPatch(typeof(Player),nameof(Player.UpdatePlacement))]
     private static class Player_UpdatePlacement_Patch
     {
@@ -1050,8 +1322,13 @@ public static class BlueprintUI
         {
             var copyFrom = __instance.m_buildHints.transform.Find("Keyboard/Place");
             if (copyFrom is null) return;
-            KeyHint_HideRequirements = CreateNewKeyHint(copyFrom, "HideRequirements", "$kg_blueprint_hiderequirements".Localize(), "$kg_blueprint_hiderequirements_keys".Localize());
-            KeyHint_LeftControl_Snap = CreateNewKeyHint(copyFrom, "PrecisePlacement", "$kg_blueprint_preciseplacement".Localize(), "$kg_blueprint_preciseplacement_keys".Localize());
+            KeyHint_HideRequirements = CreateNewKeyHint(copyFrom, "HideRequirements", "$kg_blueprint_hiderequirements", "$kg_blueprint_hiderequirements_keys");
+            KeyHint_LeftControl_Snap = CreateNewKeyHint(copyFrom, "PrecisePlacement", "$kg_blueprint_preciseplacement", "$kg_blueprint_preciseplacement_keys");
+            if (Localization.m_instance != null)
+            {
+                Localization.instance.Localize(__instance.m_buildHints.transform);
+                BlueprintLocalizationFallback.RefreshTokens(__instance.m_buildHints.transform);
+            }
         }
     }
     [HarmonyPatch(typeof(KeyHints),nameof(KeyHints.UpdateHints))]
@@ -1059,11 +1336,29 @@ public static class BlueprintUI
     {
         [UsedImplicitly] private static void Postfix(KeyHints __instance)
         {
-            if (__instance.m_buildHints.activeSelf)
+            if (__instance.m_buildHints && __instance.m_buildHints.activeSelf)
             {
                 bool holdingHammer = IsHoldingHammer;
-                KeyHints_Awake_Patch.KeyHint_LeftControl_Snap.SetActive(holdingHammer);
-                KeyHints_Awake_Patch.KeyHint_HideRequirements.SetActive(holdingHammer);
+                if (KeyHints_Awake_Patch.KeyHint_LeftControl_Snap)
+                {
+                    KeyHints_Awake_Patch.KeyHint_LeftControl_Snap.SetActive(holdingHammer);
+                }
+
+                if (KeyHints_Awake_Patch.KeyHint_HideRequirements)
+                {
+                    KeyHints_Awake_Patch.KeyHint_HideRequirements.SetActive(holdingHammer);
+                }
+
+                if (holdingHammer && Localization.m_instance != null && BlueprintLocalizationFallback.EnsureNativePatched())
+                {
+                    Localization.instance.Localize(__instance.m_buildHints.transform);
+                    BlueprintLocalizationFallback.RefreshTokens(__instance.m_buildHints.transform);
+                    if (UI)
+                    {
+                        Localization.instance.Localize(UI.transform);
+                        BlueprintLocalizationFallback.RefreshTokens(UI.transform);
+                    }
+                }
             }
         } 
     }
@@ -1098,3 +1393,6 @@ public static class BlueprintUI
         }
     }
 }
+
+
+

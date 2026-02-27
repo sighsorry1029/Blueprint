@@ -1,4 +1,5 @@
-﻿using System.Runtime.InteropServices;
+using System.Runtime.InteropServices;
+using System.Text;
 public static class ClipboardUtils
 {
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
@@ -28,8 +29,11 @@ public static class ClipboardUtils
     private static extern IntPtr GlobalLock(IntPtr hMem);
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool GlobalUnlock(IntPtr hMem);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GlobalSize(IntPtr hMem);
     private const uint CF_DIB = 8;
     private const uint CF_TEXT = 1;
+    private const uint CF_UNICODETEXT = 13;
     private static Texture2D CreateTextureFromClipboardData(byte[] pixelData, int width, int height, int bytesPerPixel)
     {
         Texture2D texture = new Texture2D(width, height, TextureFormat.RGBA32, false);
@@ -99,20 +103,83 @@ public static class ClipboardUtils
     }
     public static string GetText()
     {
-        if (!IsClipboardFormatAvailable(CF_TEXT)) return null; 
         if (!OpenClipboard(IntPtr.Zero)) return null;
-        IntPtr hData = GetClipboardData(CF_TEXT);
-        if (hData == IntPtr.Zero)
+        try
         {
-            CloseClipboard();
+            if (IsClipboardFormatAvailable(CF_UNICODETEXT))
+            {
+                string unicodeText = ReadUnicodeText();
+                if (!string.IsNullOrEmpty(unicodeText))
+                {
+                    return unicodeText;
+                }
+            }
+
+            if (IsClipboardFormatAvailable(CF_TEXT))
+            {
+                return ReadAnsiText();
+            }
+
             return null;
         }
+        finally
+        {
+            CloseClipboard();
+        }
+    }
+
+    private static string ReadUnicodeText()
+    {
+        IntPtr hData = GetClipboardData(CF_UNICODETEXT);
+        if (hData == IntPtr.Zero) return null;
         IntPtr pData = GlobalLock(hData);
-        try { return Marshal.PtrToStringAnsi(pData); }
+        if (pData == IntPtr.Zero) return null;
+        try
+        {
+            return Marshal.PtrToStringUni(pData);
+        }
         finally
         {
             GlobalUnlock(hData);
-            CloseClipboard();
+        }
+    }
+
+    private static string ReadAnsiText()
+    {
+        IntPtr hData = GetClipboardData(CF_TEXT);
+        if (hData == IntPtr.Zero) return null;
+        IntPtr pData = GlobalLock(hData);
+        if (pData == IntPtr.Zero) return null;
+        try
+        {
+            int size = GlobalSize(hData).ToInt32();
+            if (size <= 0)
+            {
+                return Marshal.PtrToStringAnsi(pData);
+            }
+
+            byte[] buffer = new byte[size];
+            Marshal.Copy(pData, buffer, 0, size);
+
+            int terminatorIndex = Array.IndexOf(buffer, (byte)0);
+            int length = terminatorIndex >= 0 ? terminatorIndex : buffer.Length;
+            if (length <= 0)
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                return Encoding.Default.GetString(buffer, 0, length);
+            }
+            catch
+            {
+                return new UTF8Encoding(false, false).GetString(buffer, 0, length);
+            }
+        }
+        finally
+        {
+            GlobalUnlock(hData);
         }
     }
 }

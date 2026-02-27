@@ -13,7 +13,6 @@ using HarmonyLib;
 using JetBrains.Annotations;
 using kg_Blueprint;
 using UnityEngine;
-using Debug = UnityEngine.Debug;
 
 namespace ItemDataManager;
 
@@ -66,7 +65,15 @@ public abstract class ItemData
 			}
 
 			ZPackage pkg = new(keyVal[1]);
-			pkg.Decompress();
+			try
+			{
+				// Backward compatibility: older versions wrote compressed payloads.
+				pkg.Decompress();
+			}
+			catch
+			{
+				pkg = new ZPackage(keyVal[1]);
+			}
 			ParameterInfo param = (ParameterInfo)FormatterServices.GetUninitializedObject(typeof(ParameterInfo));
 			parameterInfoClassImpl.SetValue(param, field.FieldType);
 			obj.Clear();
@@ -91,7 +98,6 @@ public abstract class ItemData
 		{
 			ZPackage pkg = new();
 			ZRpc.Serialize(new[] { field.GetValue(this) }, ref pkg);
-			pkg.Compress();
 			toSave.Append(field.Name);
 			toSave.Append(':');
 			toSave.Append(pkg.GetBase64());
@@ -124,6 +130,10 @@ public abstract class ItemData
 
 		return serializedFields[t] = t.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance).Where(f => f.GetCustomAttributes(typeof(SerializeField), true).Length > 0).ToDictionary(f => f.Name, f => f);
 	}
+}
+
+public sealed class StringItemData : ItemData
+{
 }
 
 [PublicAPI]
@@ -218,6 +228,12 @@ public class ItemInfo : IEnumerable<ItemData>
 
 	internal static string dataKey(string key) => $"{modGuid}#{key}";
 
+	public string? this[string key]
+	{
+		get => Get<StringItemData>(key)?.Value;
+		set => GetOrCreate<StringItemData>(key).Value = value ?? "";
+	}
+
 	internal ItemInfo(ItemDrop.ItemData itemData)
 	{
 		ItemData = itemData;
@@ -301,6 +317,8 @@ public class ItemInfo : IEnumerable<ItemData>
 		LoadAll();
 		return data.Values.Where(o => o is T).ToDictionary(o => o.Key, o => (T)o);
 	}
+
+	public bool Remove(string key = "") => Remove<StringItemData>(key);
 
 	public bool Remove<T>(string key = "") where T : ItemData
 	{
@@ -810,7 +828,6 @@ public class ItemInfo : IEnumerable<ItemData>
 
 		harmony.Patch(AccessTools.DeclaredMethod(typeof(Inventory), nameof(Inventory.CanAddItem), new[] { typeof(ItemDrop.ItemData), typeof(int) }), prefix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(ItemInfo), nameof(SaveCheckingForStackableItemData))), finalizer: new HarmonyMethod(typeof(ItemInfo), nameof(ResetCheckingForStackableItemData)));
 		harmony.Patch(AccessTools.DeclaredMethod(typeof(Inventory), nameof(Inventory.AddItem), new[] { typeof(ItemDrop.ItemData) }), prefix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(ItemInfo), nameof(SaveCheckingForStackableItemData))), finalizer: new HarmonyMethod(typeof(ItemInfo), nameof(ResetCheckingForStackableItemData)));
-		harmony.Patch(AccessTools.DeclaredMethod(typeof(Inventory), nameof(Inventory.AddItem), new[] { typeof(ItemDrop.ItemData), typeof(Vector2i) }), prefix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(ItemInfo), nameof(SaveCheckingForStackableItemData))), finalizer: new HarmonyMethod(typeof(ItemInfo), nameof(ResetCheckingForStackableItemData)));
 
 		harmony.Patch(AccessTools.DeclaredMethod(typeof(Inventory), nameof(Inventory.FindFreeStackSpace)), transpiler: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(ItemInfo), nameof(CheckStackableInFindFreeStackMethods))));
 		harmony.Patch(AccessTools.DeclaredMethod(typeof(Inventory), nameof(Inventory.FindFreeStackItem)), transpiler: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(ItemInfo), nameof(CheckStackableInFindFreeStackMethods))), prefix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(ItemInfo), nameof(ResetNewValuesOnStackable))), postfix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(ItemInfo), nameof(ApplyNewValuesOnStackable))));

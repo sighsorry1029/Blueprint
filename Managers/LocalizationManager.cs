@@ -1,15 +1,19 @@
-﻿using System.Runtime.CompilerServices;
+﻿using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text;
 using BepInEx;
 using BepInEx.Bootstrap;
 using BepInEx.Configuration;
 using HarmonyLib;
 using JetBrains.Annotations;
+using UnityEngine;
 using YamlDotNet.Serialization;
 
 namespace LocalizationManager;
-
-using kg_Blueprint;
 
 [PublicAPI]
 public class Localizer
@@ -49,6 +53,41 @@ public class Localizer
     }
 
     private static readonly List<string> fileExtensions = [".json", ".yml"];
+
+    private static IEnumerable<string> LocalizationFilePrefixes
+    {
+        get
+        {
+            if (!string.IsNullOrWhiteSpace(plugin.Info.Metadata.Name))
+            {
+                yield return plugin.Info.Metadata.Name;
+            }
+
+            if (!string.IsNullOrWhiteSpace(plugin.Info.Metadata.GUID) && !plugin.Info.Metadata.GUID.Equals(plugin.Info.Metadata.Name, StringComparison.OrdinalIgnoreCase))
+            {
+                yield return plugin.Info.Metadata.GUID;
+            }
+        }
+    }
+
+    private static bool TryGetLanguageFromExternalFile(string file, out string language)
+    {
+        string fileName = Path.GetFileNameWithoutExtension(file);
+        foreach (string prefix in LocalizationFilePrefixes)
+        {
+            string prefixWithDot = prefix + ".";
+            if (!fileName.StartsWith(prefixWithDot, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            language = fileName.Substring(prefixWithDot.Length);
+            return !string.IsNullOrWhiteSpace(language);
+        }
+
+        language = string.Empty;
+        return false;
+    }
 
     private static void UpdatePlaceholderText(Localization localization, string key)
     {
@@ -124,15 +163,13 @@ public class Localizer
         localizationLanguage.Add(__instance, language);
 
         Dictionary<string, string> localizationFiles = new();
-        foreach (string file in Directory.GetFiles(Path.GetDirectoryName(Paths.PluginPath)!, "kg.Blueprint.*", SearchOption.AllDirectories).Where(f => fileExtensions.IndexOf(Path.GetExtension(f)) >= 0))
+        foreach (string file in Directory.GetFiles(Path.GetDirectoryName(Paths.PluginPath)!, "*.*", SearchOption.AllDirectories).Where(f => fileExtensions.IndexOf(Path.GetExtension(f)) >= 0))
         {
-            string[] parts = Path.GetFileNameWithoutExtension(file).Split('.');
-            if (parts.Length < 3)
+            if (!TryGetLanguageFromExternalFile(file, out string key))
             {
                 continue;
             }
 
-            string key = parts[2];
             if (localizationFiles.ContainsKey(key))
             {
                 // Handle duplicate key
@@ -198,15 +235,20 @@ public class Localizer
 
     private static byte[]? LoadTranslationFromAssembly(string language)
     {
-        foreach (string extension in fileExtensions)
+        List<string> resourceBaseNames = ["translations." + language];
+        foreach (string prefix in LocalizationFilePrefixes)
         {
-            if (ReadEmbeddedFileBytes("kg.Blueprint." + language + extension) is { } data)
+            resourceBaseNames.Add("translations." + prefix + "." + language);
+        }
+
+        foreach (string resourceBaseName in resourceBaseNames)
+        {
+            foreach (string extension in fileExtensions)
             {
-                return data;
-            }
-            if (ReadEmbeddedFileBytes("translations." + language + extension) is { } dataOld)
-            {
-                return dataOld;
+                if (ReadEmbeddedFileBytes(resourceBaseName + extension) is { } data)
+                {
+                    return data;
+                }
             }
         }
 
