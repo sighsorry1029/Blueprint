@@ -1,0 +1,72 @@
+kg_blueprint: Blueprint
+kg_blueprint_piece: Blueprint Box
+kg_blueprint_piece_large: Blueprint Box (Large)
+kg_blueprint_piece_large_nofloor: Blueprint Box (Large) No Floor
+kg_blueprint_piece_deleted: Box deleted
+kg_blueprint_box: Box
+kg_blueprint_piece_desc: "Blueprint Box is a structure that allows you to create a blueprint of your base or any other structure you have built.\nPlacing Pieces inside box area is free and doen't require any resources.\nOnce you have placed all the pieces you want to blueprint, you can save the blueprint and load it later to build the same structure again with Blueprint tool."
+kg_blueprint_delete: Delete
+kg_blueprint_confirmdelete: "Are you sure want to delete blueprint:"
+kg_blueprint_rename: Rename
+kg_blueprint_showfile: Show File
+kg_blueprint_load: Load
+kg_blueprint_cancel: Cancel
+kg_blueprint_load_error: Blueprint load error
+kg_blueprint_load_error_desc: You must be inside the Blueprint Box to load a blueprint.
+kg_blueprint_confirmload: "Are you sure want to load blueprint: <color=yellow>$1</color>?\nChoose load type.</color>"
+kg_blueprint_saveblueprint: Save Blueprint
+kg_blueprint_clear: Clear Blueprint area
+kg_blueprint_clear_desc: "Clear blueprint area of all pieces. It will also remove non-blueprint pieces\n<color=red>Note: this action cannot be undone.</color>"
+kg_blueprint_cleared: Blueprint area cleared
+kg_blueprint_createblueprint_title: Enter blueprint name
+kg_blueprint_cantbuildblueprintinsidebox: You can't build a blueprint inside a Blueprint Box
+kg_blueprint_cantbuildobjectsoutsideblueprint: You can't build objects outside the Blueprint Box
+kg_blueprint_building: Building
+kg_blueprint_select: Select
+kg_blueprint_hammer: Blueprint Scroll
+kg_blueprint_hammer_desc: "Blueprint Scroll is a tool that allows you to build a structure from blueprints you have saved.\nTo build a blueprint, you must have the required resources."
+kg_blueprint_requirements: Requirements
+kg_blueprint_clipboardimage: Clipboard Image
+kg_blueprint_entername: Enter blueprint name...
+kg_blueprint_saved: successfully saved
+kg_blueprint_piece_delete: Delete Box
+kg_blueprint_piece_delete_desc: "Are you sure want to delete this box? It will remove all blueprint-made pieces inside this it.\n<color=red>Note: this action cannot be undone.</color>"
+kg_blueprint_blueprintcreator: Create New
+kg_blueprint_creator: Create new blueprint
+kg_blueprint_creator_desc: "Use mouse wheel to change radius of captured area."
+kg_blueprint_showmodelview: Show Preview
+kg_blueprint_nodescription: No description
+kg_blueprint_author: Author
+kg_blueprint_noauthor: Unknown
+kg_blueprint_enterdescription: Enter description...
+kg_blueprint_save: Save
+kg_blueprint_reloaddisk: Reload
+kg_blueprint_reloaddisk_desc: "Reload blueprints from disk."
+kg_blueprint_addfromclipboard: Add from clipboard
+kg_blueprint_addfromclipboard_desc: "Add blueprint from clipboard. Can be either raw yml text or base64 encoded text."
+kg_blueprint_copytoclipboard: Copy to clipboard
+kg_blueprint_copytoclipboard_desc: "Copy blueprint to clipboard."
+kg_blueprint_copy: Copy
+kg_blueprint_selectall: Select
+kg_blueprint_add: Add
+kg_blueprint_opensharing: Open Sharing
+kg_blueprint_sharing_piece: Sharing
+kg_blueprint_sharingpiece: Blueprint Table
+kg_blueprint_sharingpiece_desc: "Blueprint Table is a structure that allows you to share your blueprints with other players.\nYou can add your blueprints to the table and other players can load them."
+kg_blueprint_preciseplacement: "Precise Placement"
+kg_blueprint_preciseplacement_keys: "← ↑ → ↓ PgUp PgDn"
+kg_blueprint_hiderequirements: "Hide Requirements"
+kg_blueprint_hiderequirements_keys: "~"
+kg_blueprint_removeplacementonunequip: "Remove Placement on Unequip"
+kg_blueprint_loadframeskip: "Load blueprint frame skip"
+kg_blueprint_buildframeskip: "Build blueprint frame skip"
+kg_blueprint_loadviewmaxperframe: "Load blueprint model view max per frame"
+kg_blueprint_ghostplacementmaxperframe: "Blueprint placement ghost max per frame"
+kg_blueprint_pieces: Pieces
+kg_blueprint_converttonative: Convert to Native
+kg_blueprint_createblueprint_no_objects: "No objects to blueprint"
+kg_blueprint_book: Blueprint Book
+kg_blueprint_book_desc: "Blueprint Book is an item that holds multiple blueprints. You can add blueprints to the book and load them later."
+kg_blueprint_itemdata_noblueprints: "<color=red>No blueprints</color>"
+kg_blueprint_itemdata_blueprints: "<color=green>Has Blueprints:</color>"
+kg_blueprint_maxcreatenewsize: "Max create blueprint new size"
